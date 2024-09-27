@@ -1,24 +1,30 @@
 // src/theme.ts
 const theme = {
-    colors: {
-      background: '#f0f2f5',
-      primary: '#4a90e2',
-      text: '#333',
-      seaLevel: '#1E90FF', // DodgerBlue
-      rkb: '#000',
-      mudline: '#8B4513', // SaddleBrown
-      wellPath: '#000',
-      reservoir: '#FFD700', // Gold
-      casing: {
-        conductor: '#8B4513', // SaddleBrown
-        surface: '#A9A9A9', // DarkGray
-        production: '#708090', // SlateGray
-      },
+  colors: {
+    background: '#FFFFFF',
+    primary: '#1f77b4',
+    text: '#333333',
+    seaLevel: '#0000FF',
+    rkb: '#FF4500',
+    mudline: '#A52A2A',
+    wellPath: '#000000', // Black for the well path
+    reservoir: '#FFD700', // Yellow for the reservoir
+    openHole: '#FFFFFF', // White for the open hole
+    border: '#000000', // Black border for reservoir and open hole
+    casing: {
+      conductor: '#696969',
+      surface: '#C0C0C0',
+      production: '#808080',
+      withBend: '#4682B4',
     },
-    fonts: {
-      main: 'Segoe UI, Tahoma, Geneva, Verdana, sans-serif',
+    rig: {
+      drillship: '#00008B',
+      semiSubmersible: '#4169E1',
+      jackup: '#4682B4',
+      jacket: '#00CED1',
+      condeep: '#20B2AA',
     },
-  };
-  
-  export default theme;
-  
+  },
+};
+
+export default theme;

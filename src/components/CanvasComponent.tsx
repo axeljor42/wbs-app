@@ -1,233 +1,257 @@
 // src/components/CanvasComponent.tsx
-import React, { useEffect, useRef, useState } from 'react';
-import { Stage, Layer, Line, Circle, Text, Group } from 'react-konva';
-import theme from '../theme'; // Import theme for colors and styles
+
+import React, { useRef, useState, useEffect, useCallback } from 'react';
+import { Stage, Layer } from 'react-konva';
+import SVGComponent from './layers/SVGComponent';
+import jsPDF from 'jspdf';
+import { useDrop } from 'react-dnd';
+import { layerMapping, LayerKey, ComponentType } from '../utils/layerMapping';
+import { v4 as uuidv4 } from 'uuid'; // Import UUID
+
+// If using imported SVGs
+// import { componentImages } from '../utils/componentImages';
 
 interface CanvasComponentProps {
-  formData: any;
+  visibleLayers: Record<LayerKey, boolean>;
+  setAddComponent: (fn: (componentType: ComponentType) => void) => void;
 }
 
-const CanvasComponent: React.FC<CanvasComponentProps> = ({ formData }) => {
+interface CanvasComponentState {
+  components: Array<{
+    id: string;
+    type: ComponentType;
+    x: number;
+    y: number;
+  }>;
+  selectedId: string | null;
+}
+
+const CanvasComponent: React.FC<CanvasComponentProps> = ({
+  visibleLayers,
+  setAddComponent,
+}) => {
   const stageRef = useRef<any>(null);
-  const [elements, setElements] = useState<any[]>([]);
 
+  const [state, setState] = useState<CanvasComponentState>({
+    components: [],
+    selectedId: null,
+  });
+
+  const [scaleFactor, setScaleFactor] = useState<number>(1);
+  const [position, setPosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  // Function to handle adding components, memoized to prevent re-creation
+  const handleAddComponent = useCallback(
+    (componentType: ComponentType, x?: number, y?: number) => {
+      const id = uuidv4(); // Generate unique ID
+      const newComponent = {
+        id,
+        type: componentType,
+        x: x !== undefined ? x : 100 + state.components.length * 20, // Staggered position
+        y: y !== undefined ? y : 100 + state.components.length * 20,
+      };
+      setState((prevState) => ({
+        ...prevState,
+        components: [...prevState.components, newComponent],
+      }));
+    },
+    [state.components.length]
+  );
+
+  // Assign addComponent function to parent via setAddComponent
   useEffect(() => {
-    if (formData) {
-      generateSchematic();
+    setAddComponent(handleAddComponent);
+  }, [handleAddComponent, setAddComponent]);
+
+  // Handle component selection
+  const handleSelect = useCallback((id: string) => {
+    setState((prevState) => ({
+      ...prevState,
+      selectedId: id,
+    }));
+  }, []);
+
+  // Handle component deselection when clicking on empty space
+  const handleStageClick = (e: any) => {
+    // Click on empty area - deselect
+    if (e.target === e.target.getStage()) {
+      setState((prevState) => ({
+        ...prevState,
+        selectedId: null,
+      }));
     }
-  }, [formData]);
+  };
 
-  const generateSchematic = () => {
-    const {
-      seaLevelHeight,
-      rkbHeight,
-      mudlineHeight,
-      conductorCasingDepth,
-      surfaceCasingDepth,
-      productionCasingDepth,
-      reservoirDepth,
-    } = formData;
+  // Handle layer ordering (Bring Forward / Send Backward)
+  const bringForward = useCallback(() => {
+    if (!state.selectedId) return;
+    setState((prevState) => {
+      const index = prevState.components.findIndex((comp) => comp.id === prevState.selectedId);
+      if (index < prevState.components.length - 1) {
+        const newComponents = [...prevState.components];
+        [newComponents[index], newComponents[index + 1]] = [newComponents[index + 1], newComponents[index]];
+        return { ...prevState, components: newComponents };
+      }
+      return prevState;
+    });
+  }, [state.selectedId, state.components]);
 
-    // Clear existing elements
-    setElements([]);
+  const sendBackward = useCallback(() => {
+    if (!state.selectedId) return;
+    setState((prevState) => {
+      const index = prevState.components.findIndex((comp) => comp.id === prevState.selectedId);
+      if (index > 0) {
+        const newComponents = [...prevState.components];
+        [newComponents[index], newComponents[index - 1]] = [newComponents[index - 1], newComponents[index]];
+        return { ...prevState, components: newComponents };
+      }
+      return prevState;
+    });
+  }, [state.selectedId, state.components]);
 
-    const newElements = [];
+  // Handle Save, Load, Export
+  const handleSave = useCallback(() => {
+    const json = stageRef.current.toJSON();
+    localStorage.setItem('wellSchematic', json);
+    alert('Schematic saved successfully!');
+  }, []);
 
-    const scale = 0.1; // Adjust scale as needed
+  const handleLoad = useCallback(() => {
+    const json = localStorage.getItem('wellSchematic');
+    if (json) {
+      const stage = stageRef.current;
+      stage.destroyChildren();
+      stage.loadJSON(json, () => {
+        stage.batchDraw();
+      });
+      alert('Schematic loaded successfully!');
+    } else {
+      alert('No saved schematic found.');
+    }
+  }, []);
 
-    // Base positions
-    const startX = 150;
-    const startY = 50;
+  const handleExport = useCallback(() => {
+    const uri = stageRef.current.toDataURL({ pixelRatio: 3 });
+    const pdf = new jsPDF('landscape', 'px', 'a4');
+    const imgProps = pdf.getImageProperties(uri);
+    const pdfWidth = pdf.internal.pageSize.getWidth();
+    const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+    pdf.addImage(uri, 'PNG', 0, 0, pdfWidth, pdfHeight);
+    pdf.save('well-schematic.pdf');
+  }, []);
 
-    // Draw sea level
-    newElements.push(
-      <Line
-        key="sea-level"
-        points={[startX - 100, startY, startX + 100, startY]}
-        stroke={theme.colors.seaLevel}
-        strokeWidth={2}
-      />
-    );
-    newElements.push(
-      <Text
-        key="sea-level-text"
-        x={startX + 110}
-        y={startY - 7}
-        text="Sea Level"
-        fontSize={14}
-        fill={theme.colors.text}
-      />
-    );
+  const handleWheel = useCallback((e: any) => {
+    e.evt.preventDefault();
 
-    // Draw RKB (Rotary Kelly Bushing)
-    const rkbY = startY + seaLevelHeight * scale;
-    newElements.push(
-      <Line
-        key="rkb"
-        points={[startX - 100, rkbY, startX + 100, rkbY]}
-        stroke={theme.colors.rkb}
-        dash={[4, 4]}
-        strokeWidth={2}
-      />
-    );
-    newElements.push(
-      <Text
-        key="rkb-text"
-        x={startX + 110}
-        y={rkbY - 7}
-        text="RKB"
-        fontSize={14}
-        fill={theme.colors.text}
-      />
-    );
+    const stage = stageRef.current;
+    const oldScale = stage.scaleX();
 
-    // Draw mudline
-    const mudlineY = startY + (seaLevelHeight + mudlineHeight) * scale;
-    newElements.push(
-      <Line
-        key="mudline"
-        points={[startX - 100, mudlineY, startX + 100, mudlineY]}
-        stroke={theme.colors.mudline}
-        strokeWidth={2}
-      />
-    );
-    newElements.push(
-      <Text
-        key="mudline-text"
-        x={startX + 110}
-        y={mudlineY - 7}
-        text="Mudline"
-        fontSize={14}
-        fill={theme.colors.text}
-      />
-    );
+    const pointer = stage.getPointerPosition();
+    if (!pointer) return;
 
-    // Draw casings as hollow tubes
-    const createCasing = (
-      key: string,
-      x: number,
-      y: number,
-      width: number,
-      height: number,
-      label: string,
-      color: string
-    ) => {
-      return (
-        <Group key={key} draggable>
-          {/* Left Side */}
-          <Line
-            points={[x, y, x, y + height]}
-            stroke={color}
-            strokeWidth={4}
-          />
-          {/* Right Side */}
-          <Line
-            points={[x + width, y, x + width, y + height]}
-            stroke={color}
-            strokeWidth={4}
-          />
-          {/* Base */}
-          <Line
-            points={[x, y + height, x + width, y + height]}
-            stroke={color}
-            strokeWidth={4}
-          />
-          {/* Label */}
-          <Text
-            x={x + width + 10}
-            y={y + height / 2 - 7}
-            text={label}
-            fontSize={12}
-            fill={color}
-          />
-        </Group>
-      );
+    const mousePointTo = {
+      x: (pointer.x - stage.x()) / oldScale,
+      y: (pointer.y - stage.y()) / oldScale,
     };
 
-    const casingWidth = 60;
+    const direction = e.evt.deltaY > 0 ? -1 : 1;
+    const scaleBy = 1.05;
+    const newScale = direction > 0 ? oldScale * scaleBy : oldScale / scaleBy;
 
-    // Conductor casing
-    const conductorY = mudlineY;
-    const conductorHeight = conductorCasingDepth * scale;
-    newElements.push(
-      createCasing(
-        'conductor-casing',
-        startX - casingWidth / 2,
-        conductorY,
-        casingWidth,
-        conductorHeight,
-        'Conductor Casing',
-        theme.colors.casing.conductor
-      )
-    );
+    setScaleFactor(newScale);
 
-    // Surface casing
-    const surfaceY = conductorY + conductorHeight;
-    const surfaceHeight = (surfaceCasingDepth - conductorCasingDepth) * scale;
-    newElements.push(
-      createCasing(
-        'surface-casing',
-        startX - (casingWidth - 10) / 2,
-        surfaceY,
-        casingWidth - 10,
-        surfaceHeight,
-        'Surface Casing',
-        theme.colors.casing.surface
-      )
-    );
+    const newPos = {
+      x: pointer.x - mousePointTo.x * newScale,
+      y: pointer.y - mousePointTo.y * newScale,
+    };
+    setPosition(newPos);
+  }, []);
 
-    // Production casing
-    const productionY = surfaceY + surfaceHeight;
-    const productionHeight = (productionCasingDepth - surfaceCasingDepth) * scale;
-    newElements.push(
-      createCasing(
-        'production-casing',
-        startX - (casingWidth - 20) / 2,
-        productionY,
-        casingWidth - 20,
-        productionHeight,
-        'Production Casing',
-        theme.colors.casing.production
-      )
-    );
-
-    // Draw reservoir
-    const reservoirY = startY + (seaLevelHeight + reservoirDepth) * scale;
-    newElements.push(
-      <Group key="reservoir" draggable>
-        {/* Well Path */}
-        <Line
-          points={[startX, productionY + productionHeight, startX, reservoirY]}
-          stroke={theme.colors.wellPath}
-          strokeWidth={2}
-        />
-        {/* Reservoir */}
-        <Circle
-          x={startX}
-          y={reservoirY}
-          radius={15}
-          fill={theme.colors.reservoir}
-        />
-        <Text
-          x={startX + 20}
-          y={reservoirY - 7}
-          text="Reservoir"
-          fontSize={12}
-          fill={theme.colors.text}
-        />
-      </Group>
-    );
-
-    setElements(newElements);
-  };
+  // Implement drop functionality
+  const [, drop] = useDrop(() => ({
+    accept: 'component',
+    drop: (item: { componentType: ComponentType }, monitor) => {
+      const stage = stageRef.current;
+      const pointer = stage.getPointerPosition();
+      if (pointer) {
+        handleAddComponent(
+          item.componentType,
+          (pointer.x - position.x) / scaleFactor,
+          (pointer.y - position.y) / scaleFactor
+        );
+      }
+    },
+  }));
 
   return (
     <div>
-      <Stage width={800} height={800} ref={stageRef}>
-        <Layer>{elements}</Layer>
+      <Stage
+        width={800}
+        height={800}
+        ref={(node) => {
+          stageRef.current = node;
+          if (node && node.container()) {
+            drop(node.container());
+          }
+        }}
+        scaleX={scaleFactor}
+        scaleY={scaleFactor}
+        x={position.x}
+        y={position.y}
+        onWheel={handleWheel}
+        onClick={handleStageClick}
+        draggable
+      >
+        <Layer>
+          {state.components
+            .filter((comp) => visibleLayers[layerMapping[comp.type]])
+            .map((comp) => (
+              <SVGComponent
+                key={comp.id} // Unique key
+                id={comp.id}
+                src={`/assets/${comp.type}.svg`} // Ensure correct path
+                x={comp.x}
+                y={comp.y}
+                onSelect={handleSelect}
+                isSelected={state.selectedId === comp.id}
+              />
+            ))}
+        </Layer>
       </Stage>
+      {/* Toolbar for Save, Load, Export, and Layer Ordering */}
+      <div style={{ marginTop: '10px', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+        <button onClick={handleSave} style={buttonStyle}>
+          Save Schematic
+        </button>
+        <button onClick={handleLoad} style={buttonStyle}>
+          Load Schematic
+        </button>
+        <button onClick={handleExport} style={buttonStyle}>
+          Export as PDF
+        </button>
+        <button onClick={bringForward} style={buttonStyle} disabled={!state.selectedId}>
+          Bring Forward
+        </button>
+        <button onClick={sendBackward} style={buttonStyle} disabled={!state.selectedId}>
+          Send Backward
+        </button>
+      </div>
     </div>
   );
+};
+
+// Simple inline styles for buttons
+const buttonStyle: React.CSSProperties = {
+  padding: '10px 15px',
+  backgroundColor: '#1f77b4',
+  color: '#fff',
+  border: 'none',
+  borderRadius: '4px',
+  cursor: 'pointer',
+  minWidth: '120px',
+  textAlign: 'center',
+  fontSize: '14px',
+  transition: 'background-color 0.3s',
 };
 
 export default CanvasComponent;
